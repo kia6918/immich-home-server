@@ -11,6 +11,11 @@ then deploy to the existing i5 with user-selected storage and backups preserved.
   with zero findings; the temporary scanner's published checksum was verified.
   Generated secrets, host configuration, backups and libraries remain excluded.
   README clone instructions now use the public repository URL.
+- GitHub visibility is PUBLIC and the default branch is `dev`. An anonymous HTTPS
+  clone verified public access, the pushed commit and executable deployment entry point.
+  Publication checks passed: 70 local tests, shell syntax and whitespace checks;
+  [GitHub Actions run 37657645316](https://github.com/kia6918/immich-home-server/actions/runs/37657645316)
+  passed all four Linux/macOS × Python 3.10/3.14 jobs. Temporary scan/clone tools are removed.
 - Core interactive local/SSH deployment, storage selection, network setup, supervision,
   explicit update, backup/restore, migration/rollback/resume and safe uninstall implemented.
 - Bash entry points delegate to Python 3.10+ standard-library code. Targets need no Codex.
