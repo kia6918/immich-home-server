@@ -27,6 +27,7 @@ def export():
 
 def freeze(transaction):
     config = load_config()
+    value = None
     if (STATE / 'migration-blocked').exists():
         value = json.loads((STATE / 'migration-blocked').read_text())
         if value.get('transaction') != transaction:
@@ -36,7 +37,7 @@ def freeze(transaction):
         if value.get('phase') != 'freezing':
             raise SafetyError('Cannot resume this source migration phase automatically')
     storage.bounded_check(config)
-    samples = engine.asset_samples()
+    samples = value['samples'] if value else engine.asset_samples()
     atomic_write(STATE / 'migration-blocked', json.dumps({'transaction': transaction, 'phase': 'freezing', 'samples': samples}))
     lifecycle.stop()
     bundle = backups.backup()
@@ -79,8 +80,9 @@ def receive_backup():
 
 def activate(transaction, samples):
     config = load_config()
-    storage.bounded_check(config)
     block = STATE / 'migration-blocked'
+    validate_destination_transaction(transaction)
+    storage.bounded_check(config)
     save_json(STATE / 'migration-destination.json', {'transaction': transaction, 'phase': 'starting',
               'source_samples': samples})
     block.unlink(missing_ok=True)
@@ -95,6 +97,12 @@ def activate(transaction, samples):
         lifecycle.stop()
         save_json(block, {'transaction': transaction, 'phase': 'failed-destination'})
         raise
+
+
+def validate_destination_transaction(transaction):
+    pending = json.loads((STATE / 'migration-blocked').read_text())
+    if not transaction or pending.get('transaction') != transaction or pending.get('phase') not in {'prepared', 'failed-destination'}:
+        raise SafetyError('Destination was not prepared for this migration transaction')
 
 
 def rollback_source(transaction):
@@ -116,7 +124,7 @@ def coordinate(args):
     port = args.ssh_port
     src_dir = remote.bootstrap(source, port)
     dst_dir = remote.bootstrap(destination, port)
-    config = json.loads(remote.execute(source, '_export', port=port, directory=src_dir).stdout)
+    config = json.loads(remote.execute(source, '_config' if args.resume else '_export', port=port, directory=src_dir).stdout)
     print(f'Source version: {config["version"]}\nSource storage: {config["storage"]["source"]}\n'
           f'Source library: {config["storage"]["path"]}')
     if args.resume:
@@ -131,7 +139,7 @@ def coordinate(args):
             return
         transaction = str(uuid.uuid4())
         # Prepare matching release before stopping source. Destination app cannot start.
-        arguments = ['--source-json', json.dumps(config), '--version', config['version']]
+        arguments = ['--source-json', json.dumps(config), '--version', config['version'], '--transaction', transaction]
         if mode == 0:
             arguments += ['--same-storage']
         remote.execute(destination, '_prepare', arguments, port=port, directory=dst_dir, tty=True, capture=False, timeout=7200)
@@ -141,16 +149,18 @@ def coordinate(args):
         raise SafetyError('Selected migration mode disagrees with persisted disk/share/library identity; source remains running')
     print(f'Source: {source} → {config["storage"]["path"]}\nDestination: {destination} → {dest_config["storage"]["path"]}')
     confirm('Freeze source uploads, back up database, transfer and validate destination?', 'MIGRATE')
-    frozen = json.loads(remote.execute(source, '_freeze', ['--transaction', transaction],
-                        port=port, directory=src_dir, timeout=1800).stdout)
-    log('Source stopped and durably blocked; source configuration and data preserved')
     rollback = f'./migrate.sh --rollback --source {source} --destination {destination} --transaction {transaction}' + (f' --ssh-port {port}' if port else '')
+    print('Migration transaction: ' + transaction)
     print('Rollback command: ' + rollback)
     try:
+        frozen = json.loads(remote.execute(source, '_freeze', ['--transaction', transaction],
+                            port=port, directory=src_dir, timeout=1800).stdout)
+        log('Source stopped and durably blocked; source configuration and data preserved')
         if not same:
-            copy_remote_library(source, destination, config, dest_config, port, src_dir, dst_dir, full=args.full_checksum)
+            copy_remote_library(source, destination, config, dest_config, port, src_dir, dst_dir,
+                                transaction=transaction, full=args.full_checksum)
         bundle = remote.relay_backup(source, destination, frozen['bundle'], source_port=port, destination_port=port)
-        remote.execute(destination, '_restore-migration', ['--bundle', bundle], port=port, directory=dst_dir,
+        remote.execute(destination, '_restore-migration', ['--bundle', bundle, '--transaction', transaction], port=port, directory=dst_dir,
                        capture=False, timeout=1800)
         if same and frozen.get('phase') != 'ownership-released':
             remote.execute(source, '_release', ['--transaction', transaction], port=port, directory=src_dir)
@@ -167,7 +177,7 @@ def coordinate(args):
         raise
 
 
-def copy_remote_library(source, destination, src, dst, port, src_dir, dst_dir, *, full=False):
+def copy_remote_library(source, destination, src, dst, port, src_dir, dst_dir, *, transaction, full=False):
     arguments = ['--full-checksum'] if full else []
     expected = json.loads(remote.execute(source, '_manifest', arguments, port=port, directory=src_dir, timeout=7200).stdout)
     free = json.loads(remote.execute(destination, '_space', port=port, directory=dst_dir).stdout)['free']
@@ -175,7 +185,7 @@ def copy_remote_library(source, destination, src, dst, port, src_dir, dst_dir, *
         raise SafetyError('Insufficient destination capacity for library plus headroom')
     print(f'Copy estimate: {expected["bytes"] / 1024**3:.2f} GiB, {expected["count"]} files')
     confirm('Destination must be able to SSH to source; keys/password are handled by SSH there. Copy without overwriting existing files?', 'COPY')
-    copy_arguments = ['--source', source, '--source-path', src['storage']['path']] + (['--ssh-port', str(port)] if port else [])
+    copy_arguments = ['--source', source, '--source-path', src['storage']['path'], '--transaction', transaction] + (['--ssh-port', str(port)] if port else [])
     remote.execute(destination, '_copy-from', copy_arguments,
                    port=port, directory=dst_dir, tty=True, capture=False, timeout=7 * 24 * 3600)
     actual = json.loads(remote.execute(destination, '_manifest', arguments, port=port, directory=dst_dir, timeout=7200).stdout)

@@ -10,6 +10,7 @@ import re
 import shlex
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = Path(os.environ.get('IMMICH_HOME', Path.home() / '.config/immich-home-server')).expanduser().absolute()
@@ -131,13 +132,18 @@ def persist(config):
 
 
 @contextlib.contextmanager
-def operation_lock():
+def operation_lock(wait=5):
     private_dir(STATE)
     with (STATE / 'operation.lock').open('a') as stream:
-        try:
-            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise SafetyError('Another deployment operation is running') from exc
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as exc:
+                if time.monotonic() >= deadline:
+                    raise SafetyError('Another deployment operation is running') from exc
+                time.sleep(0.1)
         yield
 
 
@@ -178,7 +184,7 @@ def private_ip(value):
 
 
 def safe_host(host):
-    if not re.fullmatch(r'(?:[A-Za-z0-9_.-]+@)?[A-Za-z0-9][A-Za-z0-9_.-]*', host):
+    if not re.fullmatch(r'(?:[A-Za-z0-9_][A-Za-z0-9_.-]*@)?[A-Za-z0-9][A-Za-z0-9_.-]*', host):
         raise SafetyError('Use an SSH alias or user@host (IPv6 via an SSH config alias)')
     return host
 

@@ -63,7 +63,10 @@ Compose edits need manual mount mapping and are deliberately rejected by sampled
 validation rather than silently losing asset access.
 
 rsync copies keep timestamps/permissions/hierarchy and use partial files without source
-deletion or destination overwrite. SSH permissions and NAS UID mappings must permit
+deletion or destination overwrite. The receiver holds its selected directory open and
+writes relative to that filesystem, preventing an unmount from redirecting copies to
+the local directory underneath. Manifests use bounded memory even for large libraries.
+SSH permissions and NAS UID mappings must permit
 the chosen paths. Hard links/extended attributes/ACLs are not assumed portable between
 SMB, NFS, APFS and Linux; original photo bytes and regular-file timestamps are verified.
 
@@ -73,6 +76,13 @@ transaction ID. **Rollback after new destination uploads needs a reverse migrati
 the current destination DB/library**; the preserved old DB predates those uploads.
 Both deployments remain recoverable. Manually remove the old application only after
 validation and a separate verified library backup.
+
+The transaction ID and rollback command are printed before freezing the source. To
+continue a failed transfer/restore, rerun with the same hosts and
+`--resume --transaction <printed-id>` (and `--full-checksum` if used initially).
+The destination copy, restore and activation must match its prepared transaction.
+Source remains blocked throughout retries. Never resume after rollback or after the
+destination has begun accepting new uploads.
 
 ## Interrupted operations
 

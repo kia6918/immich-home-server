@@ -10,7 +10,7 @@ then a real i5 deployment with user-selected storage and production backups pres
   on targets. Host secrets/state stay outside repository.
 - Official documentation checked; latest stable release at this session: `v3.2.4`.
 - Core deploy/storage/ownership/supervisor/backup/restore/update/migration implemented.
-- Automated suite: 58 tests pass. Shell syntax passes. Actual official Compose v3.2.4
+- Automated suite: 65 tests pass. Shell syntax passes. Actual official Compose v3.2.4
   parsing passed on M4 with spaces, apostrophes and literal dollars. Mutation check
   proved root-fallback regression test fails when identity validation is disabled.
 - M4 read-only inventory: macOS 26.6.2, arm64 M4 Pro, 24 GiB RAM. Existing Docker.app
@@ -23,8 +23,19 @@ then a real i5 deployment with user-selected storage and production backups pres
 - Real doctor: PASS 8 / WARN 0 / FAIL 0. Five synthetic PNG assets uploaded and downloaded
   via authenticated API with exact checksum matching. Logical backup and fresh-directory
   restore passed; five original assets verified after restore.
-- No real photo library/NAS/backup data modified. Temporary SMB and NFS server/mounts
-  created only inside the disposable VM. Network fault/migration tests are next.
+- No real photo library/NAS/backup data modified. Temporary SMB/NFS servers and mounts
+  exist only in disposable VMs. Live SMB reconfiguration/copy and missing-mount fault
+  passed: guard stopped writers, fallback root directory retained only fixture marker.
+- Same-SMB-storage migration to second VM `immich-dest` passed (no photo copy), doctor
+  PASS 9 / WARN 0 / FAIL 0; authenticated original downloads passed. Source start was
+  refused while blocked. Printed rollback command passed; only one server running.
+- NFS reconfiguration/copy passed with five authenticated original downloads. New-storage
+  migration (NFS to destination local path, full checksum) is currently in progress.
+- Both VMs use private Lima network `immich-test-net`, no host filesystem shares or
+  automatic service port forwarding. Fixture NAS runs on source guest only.
+- Hardened transactions for destination copy/restore/activation/rollback, resumed freeze
+  uses saved samples, copy pins destination directory FD, manifests use constant memory.
+  Added bounded lock waiting and network helper package provisioning.
 
 ## Key decisions and files
 
@@ -40,12 +51,11 @@ then a real i5 deployment with user-selected storage and production backups pres
 
 ## Next work and unresolved validation
 
-1. Direct Docker network volumes now fence NAS writes from host-root fallback. Test
-   SMB/NFS disappearance live and check supervisor crash/start behavior.
-2. Fix any lifecycle/state issues found by tests; add full interactive mocked workflow
-   tests and real disposable Compose integration tests if Docker becomes available.
-3. Verify current schema asset queries against the pinned release, actual backup/restore
-   and same/new storage migration, including failures and rollback.
+1. Finish new-storage migration/full checksums and rollback; test NFS missing mount.
+   Exercise real explicit version update and safe uninstall with preserved fixture data.
+2. Fix lifecycle issues found by live tests; rerun focused unit/mutation/Compose checks.
+   Mac native Docker remains unavailable; Intel/macOS/Debian live checks unverified.
+3. Record concrete evidence in docs/VALIDATION.md; no production URL is available yet.
 4. Commit verified milestones, run shell/static checks and secret exclusion checks.
 5. Obtain actual i5 SSH endpoint, inspect services/mounts/backups read-only, present its
    storage candidates to the user. Do not guess its 8TB mount.

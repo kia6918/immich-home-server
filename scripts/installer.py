@@ -95,7 +95,8 @@ def install(args, *, prepare=False, source=None):
     persist(config)
     atomic_write(STATE / 'maintenance', 'installation pending validation\n')
     if prepare:
-        atomic_write(STATE / 'migration-blocked', 'destination awaiting migration cutover\n')
+        save_json(STATE / 'migration-blocked', {'transaction': args.transaction, 'phase': 'prepared',
+                  'source_deployment_id': source['deployment_id']})
     official = STATE / 'official' / config['version']
     engine.download_release(metadata, official)
     engine.generate_env(config)

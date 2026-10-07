@@ -161,7 +161,7 @@ def validate_db(path, table=None, *, require_internal=True):
                                external(item.get('children', [])) for item in items)
                 if external(json.loads(result.stdout).get('blockdevices', [])):
                     raise SafetyError('PostgreSQL must not use removable/USB/iSCSI storage')
-            elif mount['fstype'] != 'zfs':
+            else:
                 raise SafetyError('Cannot validate database disk hardware with lsblk')
     return mount
 
@@ -205,7 +205,7 @@ def bounded_check(config):
             proc.stderr.close()
         raise SafetyError('Storage probe timed out; selected storage may be offline') from exc
     if proc.returncode:
-        raise SafetyError(error.strip() or output.strip() or 'Storage probe failed')
+        raise SafetyError((error.strip() or output.strip() or 'Storage probe failed').removeprefix('[ERROR] '))
 
 
 def configure_docker_volume(config):
@@ -255,7 +255,7 @@ def candidates():
     for item in table:
         if item['fstype'] not in LOCAL | NETWORK or item['target'] == '/':
             continue
-        if item['target'].startswith(('/System/', '/private/', '/boot', '/snap/', '/dev/', '/proc/')):
+        if item['target'].startswith(('/System/', '/private/', '/boot', '/snap/', '/dev/', '/proc/', '/var/lib/docker/', '/var/lib/containerd/')):
             continue
         if item['target'] not in result:
             result.append(item['target'])
@@ -291,6 +291,14 @@ def add_network():
     if target.exists() and any(target.iterdir()):
         raise SafetyError('Mount path must be empty; existing files will not be hidden')
     confirm(f'Mount {protocol.upper()} {server}/{export} at {target}? Existing disks/files are preserved.')
+    if platform.system() == 'Linux':
+        helper, package = ('mount.cifs', 'cifs-utils') if protocol == 'smb' else ('mount.nfs', 'nfs-common')
+        if not shutil.which(helper) and not (Path('/sbin') / helper).is_file():
+            import environment
+            environment.platform_info()  # Refuse unsupported distributions before apt mutations.
+            log('Installing required network mount helper: ' + package)
+            run(['sudo', 'apt-get', 'update'], capture=False, timeout=600)
+            run(['sudo', 'apt-get', 'install', '-y', package], capture=False, timeout=600)
     run(['sudo', 'mkdir', '-p', target], capture=False)
     if protocol == 'nfs':
         options = 'resvport,nosuid,nodev' if platform.system() == 'Darwin' else 'nosuid,nodev'

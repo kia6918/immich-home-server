@@ -123,13 +123,61 @@ class WorkflowTests(TemporaryState):
         self.assertIn('--interactive=false', invoke.call_args.args[0])
 
     def test_failed_migration_activation_stops_and_reblocks(self):
-        (self.state / 'migration-blocked').write_text('pending')
+        common.save_json(self.state / 'migration-blocked', {'transaction': 'transaction', 'phase': 'prepared'})
         with patch('migration.load_config', return_value=config()), patch('migration.storage.bounded_check'), \
              patch('migration.lifecycle.start', side_effect=common.SafetyError('failed health')), patch('migration.lifecycle.stop') as stop:
             with self.assertRaises(common.SafetyError):
                 migration.activate('transaction', [])
             stop.assert_called_once()
         self.assertEqual(json.loads((self.state / 'migration-blocked').read_text())['phase'], 'failed-destination')
+
+    def test_activation_rejects_unrelated_transaction_before_start(self):
+        common.save_json(self.state / 'migration-blocked', {'transaction': 'another', 'phase': 'prepared'})
+        with patch('migration.load_config', return_value=config()), patch('storage.bounded_check'), \
+             patch('engine.verify_assets'), patch('lifecycle.doctor', return_value=True), patch('lifecycle.start') as start:
+            with self.assertRaises(common.SafetyError):
+                migration.activate('wrong', [])
+            start.assert_not_called()
+
+    def test_rollback_destination_requires_known_transaction(self):
+        args = SimpleNamespace(command='_rollback-destination', transaction='unknown')
+        with patch('cli.load_config', return_value=config()), patch('lifecycle.stop') as stop:
+            with self.assertRaises(common.SafetyError):
+                cli.worker(args)
+            stop.assert_not_called()
+
+    def test_freeze_resumes_saved_samples_without_running_app(self):
+        common.save_json(self.state / 'migration-blocked', {'transaction': 'tx', 'phase': 'freezing', 'samples': []})
+        with patch('migration.load_config', return_value=config()), patch('storage.bounded_check'), \
+             patch('engine.asset_samples', side_effect=AssertionError('stopped app queried')), \
+             patch('lifecycle.stop'), patch('backup.backup', return_value=self.root):
+            value = migration.freeze('tx')
+        self.assertEqual(value['phase'], 'frozen')
+
+    def test_migration_restore_rejects_wrong_transaction_without_db_mutation(self):
+        common.save_json(self.state / 'migration-blocked', {'transaction': 'real', 'phase': 'prepared'})
+        with patch('sys.argv', ['cli.py', '_restore-migration', '--transaction', 'wrong', '--bundle', '/fixture']), \
+             patch('backup.restore') as restore:
+            with self.assertRaises(common.SafetyError):
+                cli.main()
+            restore.assert_not_called()
+
+    def test_storage_candidates_hide_docker_internal_mounts(self):
+        table = [{'target': p, 'fstype': 'cifs'} for p in ['/mnt/photos', '/var/lib/docker/volumes/x/_data']]
+        with patch('storage.mounts', return_value=table):
+            candidates = storage.candidates()
+        self.assertIn('/mnt/photos', candidates)
+        self.assertNotIn('/var/lib/docker/volumes/x/_data', candidates)
+
+    def test_operation_lock_refuses_concurrent_mutation(self):
+        with common.operation_lock(wait=0):
+            with self.assertRaises(common.SafetyError):
+                with common.operation_lock(wait=0):
+                    self.fail('Concurrent mutation accepted')
+
+    def test_option_like_ssh_username_rejected(self):
+        with self.assertRaises(common.SafetyError):
+            common.safe_host('-F@server')
 
     def test_update_failure_never_automatically_downgrades(self):
         cfg = config()

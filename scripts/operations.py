@@ -64,9 +64,13 @@ def update(target=None):
 
 
 def library_manifest(root, *, full=False):
+    import hashlib
     root = Path(root)
-    files = {}
-    for current, directories, names in os.walk(root, followlinks=False):
+    count, size, checksum_count = 0, 0, 0
+    entries, checksums = hashlib.sha256(), hashlib.sha256()
+    def traversal_error(error):
+        raise SafetyError('Cannot inspect every library directory: ' + str(error))
+    for current, directories, names in os.walk(root, followlinks=False, onerror=traversal_error):
         directories[:] = sorted(d for d in directories if not d.startswith(('.immich-home-server-owner', '.immich-owner-history', '.immich-partial', '.immich-docker-probe-')))
         for directory in directories:
             if (Path(current) / directory).is_symlink():
@@ -78,16 +82,16 @@ def library_manifest(root, *, full=False):
             if path.is_symlink() or not path.is_file():
                 raise SafetyError('Library contains symlinks/special files; copy refused')
             relative = str(path.relative_to(root))
-            files[relative] = {'size': path.stat().st_size}
+            stat = path.stat()
+            count += 1
+            size += stat.st_size
+            entries.update((json.dumps([relative, stat.st_size, int(stat.st_mtime)], ensure_ascii=True) + '\n').encode())
             # Deterministic sample across whole tree; all files checked when full=True.
-            import hashlib
-            if full or int(hashlib.sha256(relative.encode()).hexdigest()[:8], 16) % 100 == 0 or not files:
-                files[relative]['sha256'] = backups.file_hash(path)
-    # Always verify at least one checksum for small libraries.
-    if files and not any('sha256' in entry for entry in files.values()):
-        first = next(iter(files))
-        files[first]['sha256'] = backups.file_hash(root / first)
-    return {'files': files, 'count': len(files), 'bytes': sum(item['size'] for item in files.values())}
+            if full or count == 1 or int(hashlib.sha256(relative.encode()).hexdigest()[:8], 16) % 100 == 0:
+                checksums.update((json.dumps([relative, backups.file_hash(path)], ensure_ascii=True) + '\n').encode())
+                checksum_count += 1
+    return {'count': count, 'bytes': size, 'entries_sha256': entries.hexdigest(),
+            'checksums_sha256': checksums.hexdigest(), 'checksum_files': checksum_count, 'full_checksum': full}
 
 
 def verify_manifest(expected, actual):
@@ -113,12 +117,12 @@ def copy_library(source, destination, *, full=False):
         raise SafetyError('Destination needs library size plus 15% headroom and 10 GiB free')
     print(f'Source: {source_path}\nDestination: {dest_path}\nData size: {expected["bytes"] / 1024**3:.2f} GiB / {expected["count"]} files')
     confirm('Copy this library without deleting source files or overwriting destination files?', 'COPY')
-    rsync_copy(str(source_path) + '/', str(dest_path) + '/')
+    rsync_copy(str(source_path) + '/', str(dest_path) + '/', destination_storage=destination)
     verify_manifest(expected, library_manifest(dest_path, full=full))
     log('Library copy verified by names, file count, byte count, and checksums')
 
 
-def rsync_copy(source, destination, *, ssh=None):
+def rsync_copy(source, destination, *, ssh=None, destination_storage=None):
     version = run(['rsync', '--version']).stdout
     args = ['rsync', '-a', '--partial', '--partial-dir=.immich-partial', '--ignore-existing', '--no-owner', '--no-group', '--progress']
     # Apple's bundled rsync does not support -s; argv still preserves spaces for local paths.
@@ -130,7 +134,18 @@ def rsync_copy(source, destination, *, ssh=None):
     if ssh:
         args += ['-e', ssh]
     # Source/destination always absolute or validated user@host:/absolute/path; no shell evaluation.
-    run(args + ['--', source, destination], capture=False, timeout=7 * 24 * 3600)
+    fd = os.open(destination.rstrip('/'), os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        # Pin the already selected destination directory before starting rsync. Even a
+        # lazy unmount after this point cannot redirect relative writes to host root.
+        if os.fstat(fd).st_dev != os.stat(destination).st_dev:
+            raise SafetyError('Copy destination filesystem changed while opening it')
+        if destination_storage:
+            storage.check(destination_storage)
+        run(args + ['--', source, './'], capture=False, timeout=7 * 24 * 3600,
+            pass_fds=(fd,), preexec_fn=lambda: os.fchdir(fd))
+    finally:
+        os.close(fd)
 
 
 def reconfigure():

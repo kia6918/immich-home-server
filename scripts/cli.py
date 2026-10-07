@@ -23,7 +23,7 @@ def parser():
     result = argparse.ArgumentParser(description='Portable Immich installer. See README.md for safety and prerequisites.')
     result.add_argument('command', nargs='?', default='deploy', choices=[
         'deploy', 'install', 'inspect', 'start', 'stop', 'status', 'doctor', 'backup', 'restore', 'update',
-        'uninstall', 'reconfigure', 'migrate', 'guard', 'detect-os', 'detect-storage', 'check-storage',
+        'uninstall', 'reconfigure', 'migrate', 'guard', 'detect-os', 'detect-storage', 'select-storage', 'install-docker', 'check-storage',
         '_probe', '_prepare', '_export', '_config', '_freeze', '_release', '_receive-backup',
         '_restore-migration', '_activate', '_manifest', '_space', '_copy-from', '_rollback-source', '_rollback-destination'])
     for option in ('host', 'storage', 'db-path', 'bind-ip', 'version', 'timezone', 'bundle', 'source',
@@ -65,7 +65,8 @@ def worker(args):
     if command == '_rollback-destination':
         config = load_config()
         transaction_file = STATE / 'migration-destination.json'
-        if transaction_file.exists() and json.loads(transaction_file.read_text()).get('transaction') != args.transaction:
+        pending = transaction_file if transaction_file.exists() else STATE / 'migration-blocked'
+        if not pending.exists() or json.loads(pending.read_text()).get('transaction') != args.transaction:
             raise SafetyError('Destination belongs to a different transaction')
         lifecycle.stop()
         save_json(STATE / 'migration-blocked', {'transaction': args.transaction, 'phase': 'rolled-back-destination'})
@@ -119,6 +120,11 @@ def main():
             for path in storage.candidates():
                 print(path)
                 storage.show_candidate(path)
+        elif command == 'select-storage':
+            print(storage.select_path())
+        elif command == 'install-docker':
+            import environment
+            environment.install_docker()
         elif command == 'check-storage':
             storage.bounded_check(load_config())
             log('Storage verified')
@@ -157,10 +163,12 @@ def main():
         elif command == '_prepare':
             installer.install(args, prepare=True, source=json.loads(args.source_json))
         elif command == '_restore-migration':
+            migration.validate_destination_transaction(args.transaction)
             backup.restore(args.bundle, confirmed=True, migration=True)
         elif command == '_activate':
             migration.activate(args.transaction, json.loads(args.samples_json))
         elif command == '_copy-from':
+            migration.validate_destination_transaction(args.transaction)
             config = load_config()
             storage.bounded_check(config)
             source = args.source_path
@@ -178,7 +186,8 @@ def main():
             safe_host(args.source)
             operations.rsync_copy(args.source + ':' + source.rstrip('/') + '/',
                                   config['storage']['path'].rstrip('/') + '/',
-                                  ssh='ssh' + (' -p ' + str(args.ssh_port) if args.ssh_port else '') + ' -o ConnectTimeout=10')
+                                  ssh='ssh' + (' -p ' + str(args.ssh_port) if args.ssh_port else '') + ' -o ConnectTimeout=10',
+                                  destination_storage=config['storage'])
         elif command.startswith('_'):
             with contextlib.redirect_stdout(sys.stderr):
                 value = worker(args)

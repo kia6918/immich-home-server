@@ -116,6 +116,7 @@ def install_supervisor():
         run(['sudo', 'install', '-m', '644', staged, unit], capture=False)
         run(['sudo', 'systemctl', 'daemon-reload'], capture=False)
         run(['sudo', 'systemctl', 'enable', '--now', 'immich-home-server.service'], capture=False)
+        run(['sudo', 'systemctl', 'restart', 'immich-home-server.service'], capture=False)
         run(['sudo', 'systemctl', 'is-active', '--quiet', 'immich-home-server.service'])
     else:
         uid = os.getuid()
@@ -149,7 +150,7 @@ def guard():
     log('Storage supervisor running')
     while not quitting:
         try:
-            with operation_lock():
+            with operation_lock(wait=0):
                 if (STATE / 'enabled').exists() and not (STATE / 'maintenance').exists():
                     config = load_config()
                     try:

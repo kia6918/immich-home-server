@@ -352,7 +352,7 @@ class CopyBackupTests(TemporaryState):
             (self.root / name).write_text(name)
         result = operations.library_manifest(self.root, full=True)
         self.assertEqual(result['count'], 3)
-        self.assertTrue(all('sha256' in item for item in result['files'].values()))
+        self.assertEqual(result['checksum_files'], 3)
 
     def test_nonempty_destination_and_symlinks_rejected(self):
         (self.root / 'existing.jpg').write_text('preserve')
@@ -389,13 +389,16 @@ class CopyBackupTests(TemporaryState):
 
     def test_rsync_never_deletes_or_overwrites(self):
         result = subprocess.CompletedProcess([], 0, 'rsync version 3.4.0', '')
+        destination = self.root / 'My Photos'
+        destination.mkdir()
         with patch('operations.run', return_value=result) as invoke:
-            operations.rsync_copy('/source/My Photos/', '/dest/My Photos/')
+            operations.rsync_copy('/source/My Photos/', str(destination) + '/')
         args = invoke.call_args.args[0]
         self.assertIn('--ignore-existing', args)
         self.assertIn('--partial', args)
         self.assertNotIn('--delete', args)
-        self.assertEqual(args[-2:], ['/source/My Photos/', '/dest/My Photos/'])
+        self.assertEqual(args[-2:], ['/source/My Photos/', './'])
+        self.assertTrue(invoke.call_args.kwargs['pass_fds'])
 
     def test_code_bundle_excludes_secrets_and_tests(self):
         # The public deployment bundle explicitly includes code/templates only.
