@@ -5,15 +5,14 @@ explicit version updates, logical backups, and staged migration. The development
 does not become the production server.
 
 ```bash
-git clone <your-repository-url> immich-home-server
+git clone https://github.com/kia6918/immich-home-server.git
 cd immich-home-server
 ./deploy.sh
 ```
 
-This repository has no machine addresses, disk names, credentials, or mounted libraries.
-The installer asks for the target and storage. Generated state stays on that target in
-`~/.config/immich-home-server` (mode 700); secret files have mode 600. The Git remote
-must be set to your own repository before the clone command can be used elsewhere.
+Deployment code contains no fixed target machine, disk, or credentials. The installer
+asks for the target and storage. Generated state stays on that target in
+`~/.config/immich-home-server` (mode 700); secret files have mode 600.
 
 ## Prerequisites and platform support
 

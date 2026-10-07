@@ -5,8 +5,12 @@ then deploy to the existing i5 with user-selected storage and backups preserved.
 
 ## Current status
 
-- Repository: `/Users/yqiu/dev/immich-home-server`, branch `dev`, local Git milestones.
-  No remote configured. No monorepo applications changed.
+- Public repository: https://github.com/kia6918/immich-home-server, branch `dev`.
+  `origin` points to this repository. No monorepo applications changed.
+- Publication requested explicitly. The full Git history passed Gitleaks 8.30.1
+  with zero findings; the temporary scanner's published checksum was verified.
+  Generated secrets, host configuration, backups and libraries remain excluded.
+  README clone instructions now use the public repository URL.
 - Core interactive local/SSH deployment, storage selection, network setup, supervision,
   explicit update, backup/restore, migration/rollback/resume and safe uninstall implemented.
 - Bash entry points delegate to Python 3.10+ standard-library code. Targets need no Codex.
@@ -61,6 +65,6 @@ then deploy to the existing i5 with user-selected storage and backups preserved.
 4. Validate doctor, LAN HTTP from M4, selected storage, DB locality and guard. Complete
    admin/iPhone onboarding and an authorized test upload. Record URL/paths/results here.
 5. Live-test remaining physical platforms when available; do not label fixture coverage
-   as real deployment validation. A Git remote can be added for the documented clone UX.
+   as real deployment validation.
 
 The real i5 acceptance criteria remain pending; do not call the overall project complete.
