@@ -1,0 +1,4 @@
+20 1 259:2 / / rw,relatime - ext4 /dev/nvme0n1p2 rw
+21 20 8:17 / /media/My\040Photos rw,relatime - ext4 /dev/sdb1 rw
+22 20 0:45 / /mnt/photos rw,relatime - cifs //nas.local/Photos rw,vers=3.1.1
+23 20 0:46 / /mnt/nfs rw,relatime - nfs4 nas.local:/exports/photos rw,vers=4.2

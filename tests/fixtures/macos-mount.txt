@@ -1,0 +1,5 @@
+/dev/disk3s1s1 on / (apfs, sealed, local, read-only, journaled)
+/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)
+/dev/disk7s1 on /Volumes/My Photos (apfs, local, nodev, nosuid, journaled)
+//yan@nas.local/Photos on /Volumes/NAS Photos (smbfs, nodev, nosuid, mounted by yan)
+nas.local:/exports/photos on /Volumes/NFS (nfs, nodev, nosuid)
