@@ -7,6 +7,7 @@ import re
 import secrets
 import shutil
 import socket
+from string import Template
 import urllib.request
 
 from common import ROOT, STATE, SafetyError, atomic_write, env_text, log, private_ip, read_env, run, save_json
@@ -70,7 +71,8 @@ def generate_env(config, password=None):
     values = {'UPLOAD_LOCATION': config['storage']['path'], 'DB_DATA_LOCATION': config['db_path'],
               'IMMICH_VERSION': config['version'], 'TZ': config['timezone'],
               'DB_PASSWORD': password, 'DB_USERNAME': 'postgres', 'DB_DATABASE_NAME': 'immich'}
-    atomic_write(old, env_text(values))
+    quoted = dict(line.split('=', 1) for line in env_text(values).splitlines())
+    atomic_write(old, Template((ROOT / 'templates/env.template').read_text()).substitute(quoted))
 
 
 def harden_compose(value, config):
@@ -95,6 +97,19 @@ def harden_compose(value, config):
             photo = [v for v in service.get('volumes', []) if v.get('target') == '/data']
             if len(photo) != 1 or photo[0].get('source') != config['storage']['path']:
                 raise SafetyError('Official upload mount layout changed')
+            if config['storage']['kind'] != 'local':
+                definition = config.get('photo_volume')
+                if not definition:
+                    raise SafetyError('Network library requires a direct Docker network-volume configuration')
+                options = json.loads((STATE / definition['options_file']).read_text())
+                expected_type = 'cifs' if definition['protocol'] == 'smb' else 'nfs'
+                expected_device = definition['source'] if definition['protocol'] == 'smb' else ':' + definition['source'].split(':', 1)[1]
+                if options.get('type') != expected_type or options.get('device') != expected_device:
+                    raise SafetyError('Docker network volume identity does not match selected storage')
+                service['volumes'] = [v for v in service['volumes'] if v.get('target') != '/data'] + [
+                    {'type': 'volume', 'source': 'network-photo', 'target': '/data',
+                     'volume': {'nocopy': True, 'subpath': definition['subpath']}}]
+                value.setdefault('volumes', {})['network-photo'] = {'name': definition['name'], 'driver': 'local', 'driver_opts': options}
             service['ports'] = [{'target': 2283, 'published': str(config['port']),
                                  'host_ip': config['bind_ip'], 'protocol': 'tcp'}]
             # Docker Desktop does not require or reliably share /etc/localtime. TZ supplies timezone.
@@ -111,23 +126,31 @@ def build_compose(config, official_dir):
     result = run(docker_prefix() + ['compose', '-p', PROJECT, '--project-directory', str(STATE),
                  '--env-file', str(STATE / '.env'), '-f', str(official_dir / 'docker-compose.yml'),
                  'config', '--format', 'json'])
-    value = harden_compose(json.loads(result.stdout), config)
+    value = harden_compose(interpolation(json.loads(result.stdout), escape=False), config)
     # Compose parses the generated document again. Preserve literal dollars after resolution.
-    def literal(item):
-        if isinstance(item, str):
-            return item.replace('$$', '$').replace('$', '$$')
-        if isinstance(item, list):
-            return [literal(v) for v in item]
-        if isinstance(item, dict):
-            return {k: literal(v) for k, v in item.items()}
-        return item
-    save_json(STATE / 'compose.json', literal(value))
+    save_json(STATE / 'compose.json', interpolation(value, escape=True))
     compose('config', '-q')
 
 
+def interpolation(item, *, escape):
+    if isinstance(item, str):
+        return item.replace('$', '$$') if escape else item.replace('$$', '$')
+    if isinstance(item, list):
+        return [interpolation(v, escape=escape) for v in item]
+    if isinstance(item, dict):
+        return {k: interpolation(v, escape=escape) for k, v in item.items()}
+    return item
+
+
 def compose(*args, **kwargs):
-    return run(docker_prefix() + ['compose', '-p', PROJECT, '--project-directory', str(STATE),
-               '--env-file', str(STATE / '.env'), '-f', str(STATE / 'compose.json'), *args], **kwargs)
+    if args and args[0] in {'exec', 'run'}:
+        args = (args[0], '--interactive=false', *args[1:])
+    return run(compose_arguments(*args), **kwargs)
+
+
+def compose_arguments(*args):
+    return docker_prefix() + ['compose', '-p', PROJECT, '--project-directory', str(STATE),
+               '--env-file', str(STATE / '.env'), '-f', str(STATE / 'compose.json'), *args]
 
 
 def check_port(config):
@@ -177,8 +200,11 @@ def sql(query):
 
 def asset_samples():
     # Ask PostgreSQL for rows as JSON to preserve filenames containing spaces/newlines.
+    algorithm = sql("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='asset' AND column_name='checksumAlgorithm');")
+    algorithm_column = ',"checksumAlgorithm" AS algorithm' if algorithm == 't' else ", 'sha1' AS algorithm"
     result = sql('SELECT COALESCE(json_agg(t),\'[]\'::json) FROM '
-                 '(SELECT id,"originalPath",encode(checksum,\'hex\') AS checksum FROM asset ORDER BY id LIMIT 5) t;')
+                 '(SELECT id,"originalPath",encode(checksum,\'hex\') AS checksum' + algorithm_column +
+                 ' FROM asset WHERE "deletedAt" IS NULL ORDER BY id LIMIT 5) t;')
     return json.loads(result)
 
 
@@ -189,11 +215,14 @@ def verify_assets(config, samples):
             raise SafetyError('External libraries require manual mount mapping; migration/update cannot verify this asset')
         relative = path.removeprefix('/data/')
         local = Path(config['storage']['path']) / relative
+        algorithm = item.get('algorithm', 'sha1').lower().replace('-', '')
+        if algorithm not in {'sha1', 'sha256'}:
+            raise SafetyError('Unknown asset checksum algorithm: ' + algorithm)
         with local.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha1').hexdigest() if hasattr(hashlib, 'file_digest') else None
+            digest = hashlib.file_digest(stream, algorithm).hexdigest() if hasattr(hashlib, 'file_digest') else None
             if digest is None:
                 stream.seek(0)
-                hasher = hashlib.sha1()
+                hasher = hashlib.new(algorithm)
                 for block in iter(lambda: stream.read(1024 * 1024), b''):
                     hasher.update(block)
                 digest = hasher.hexdigest()
@@ -210,6 +239,32 @@ def verify_upload_bind(config):
     output = compose('ps', '-q', 'immich-server').stdout.strip()
     value = json.loads(run(docker_prefix() + ['inspect', output]).stdout)[0]
     match = [m for m in value['Mounts'] if m.get('Destination') == '/data']
-    if len(match) != 1 or match[0]['Source'] != config['storage']['path'] or not match[0]['RW']:
+    if len(match) != 1 or not match[0]['RW']:
         raise SafetyError('Running upload bind is incorrect')
+    if config['storage']['kind'] == 'local':
+        if match[0]['Source'] != config['storage']['path']:
+            raise SafetyError('Running local upload bind is incorrect')
+    elif match[0].get('Name') != config['photo_volume']['name']:
+        raise SafetyError('Running NAS upload volume is incorrect')
+    marker = compose('exec', '-T', 'immich-server', 'cat', '/data/.immich-home-server-library.json').stdout
+    if json.loads(marker).get('library_id') != config['storage']['library_id']:
+        raise SafetyError('Container sees a different library identity')
     log('Running upload location verified: ' + config['storage']['path'])
+
+
+def preflight_photo(config):
+    # Uses the official server image with Node as entrypoint; the application never runs.
+    # Direct NAS mounts fail in Docker itself when the share is absent; no local fallback.
+    if config['storage']['kind'] != 'local':
+        info = json.loads(run(docker_prefix() + ['info', '--format', '{{json .}}']).stdout)
+        if int(info['ServerVersion'].split('.')[0]) < 26:
+            raise SafetyError('Direct network volume subpaths require Docker Engine 26+')
+    script = """const fs=require('fs');const path=require('path');
+const marker=JSON.parse(fs.readFileSync('/data/.immich-home-server-library.json','utf8'));
+if(marker.library_id!==process.argv[1])throw Error('Library identity mismatch');
+const dir=fs.mkdtempSync('/data/.immich-docker-probe-');
+try{const file=path.join(dir,'probe');fs.writeFileSync(file,'probe',{flag:'wx'});
+if(fs.readFileSync(file,'utf8')!=='probe')throw Error('Read/write mismatch');fs.unlinkSync(file);}
+finally{fs.rmdirSync(dir);}"""
+    compose('run', '--rm', '--no-deps', '--entrypoint', 'node', 'immich-server',
+            '-e', script, config['storage']['library_id'], timeout=120)

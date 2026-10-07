@@ -23,11 +23,11 @@ def code_bundle():
     return stream.getvalue()
 
 
-def remote_home(host, port=22):
+def remote_home(host, port=None):
     return run(ssh_args(host, port) + ['printf %s "$HOME"']).stdout.strip()
 
 
-def bootstrap(host, port=22):
+def bootstrap(host, port=None):
     log('Connecting over SSH to ' + host)
     run(ssh_args(host, port) + ['true'], capture=False)
     run(ssh_args(host, port) + ['command -v python3 >/dev/null && python3 -c "import sys; sys.exit(sys.version_info < (3,10))"'])
@@ -43,7 +43,7 @@ def bootstrap(host, port=22):
     return directory
 
 
-def execute(host, command, arguments=(), *, port=22, tty=False, capture=True, directory=None, timeout=3600):
+def execute(host, command, arguments=(), *, port=None, tty=False, capture=True, directory=None, timeout=3600):
     directory = directory or (remote_home(host, port) + '/.config/immich-home-server/runtime')
     args = ssh_args(host, port)
     if tty:
@@ -66,7 +66,7 @@ def deploy(args):
     execute(args.host, 'status', port=args.ssh_port, capture=False)
 
 
-def relay_backup(source, destination, bundle, *, source_port=22, destination_port=22):
+def relay_backup(source, destination, bundle, *, source_port=None, destination_port=None):
     # Secret-bearing archive streams directly between SSH processes, never into an M4 file.
     producer = ssh_args(source, source_port) + [remote_command(['tar', '-czf', '-', '-C', bundle, '.'])]
     home = remote_home(destination, destination_port)

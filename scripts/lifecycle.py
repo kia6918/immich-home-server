@@ -50,7 +50,7 @@ def stop(*, disable=True):
     log('Immich stopped; photos, database, and configuration preserved')
 
 
-def start(config=None, *, enable=True):
+def start(config=None, *, enable=True, recreate=False):
     config = config or load_config()
     if (STATE / 'migration-blocked').exists() or (STATE / 'maintenance').exists():
         raise SafetyError('Deployment is locked for migration/maintenance; resolve the transaction before starting')
@@ -66,7 +66,9 @@ def start(config=None, *, enable=True):
     try:
         # Check again immediately before every create/start. Docker cannot create missing host paths.
         storage.bounded_check(config)
-        engine.compose('up', '-d', timeout=600)
+        engine.preflight_photo(config)
+        storage.bounded_check(config)
+        engine.compose('up', '-d', *(['--force-recreate'] if recreate else []), timeout=600)
         deadline = time.monotonic() + config.get('health_timeout', 600)
         while time.monotonic() < deadline:
             storage.bounded_check(config)
@@ -86,8 +88,9 @@ def install_runtime():
     destination = private_dir(STATE / 'runtime')
     if ROOT != destination:
         for directory in ('scripts', 'config', 'templates'):
-            shutil.copytree(ROOT / directory, destination / directory, dirs_exist_ok=True,
-                            ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+            if (ROOT / directory).is_dir():
+                shutil.copytree(ROOT / directory, destination / directory, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
         for path in ROOT.glob('*.sh'):
             shutil.copy2(path, destination / path.name)
     return destination

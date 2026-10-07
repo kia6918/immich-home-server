@@ -142,7 +142,7 @@ class TemporaryState(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='immich-test-')
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.state = self.root / 'state'
         self.state.mkdir()
         self.patches = []
@@ -295,7 +295,9 @@ class ComposeTests(unittest.TestCase):
         return {'name': 'immich', 'services': services}
 
     def test_hardening_and_port(self):
-        value = engine.harden_compose(self.official(), config())
+        cfg = config()
+        cfg['storage']['kind'] = 'local'
+        value = engine.harden_compose(self.official(), cfg)
         self.assertEqual(value['name'], 'immich-home-server')
         for service in value['services'].values():
             self.assertEqual(service['restart'], 'no')

@@ -56,7 +56,7 @@ def install(args, *, prepare=False, source=None):
     if (STATE / 'config.json').exists():
         if prepare:
             raise SafetyError('Destination already has a deployment; migration requires a fresh destination state')
-        return existing_menu()
+        return existing_menu(args)
     info = environment.inventory(save=True)
     environment.display(info)
     environment.install_docker()
@@ -75,7 +75,7 @@ def install(args, *, prepare=False, source=None):
     bind_ip = args.bind_ip or prompt('LAN IPv4 address to bind (use static DHCP reservation)', private_addresses[0] if len(private_addresses) == 1 else None)
     if not private_ip(bind_ip):
         raise SafetyError('Choose an explicit private LAN or Tailscale IPv4 address')
-    port = int(args.port or prompt('Immich port', 2283))
+    port = int(args.port or (2283 if args.yes else prompt('Immich port', 2283)))
     metadata = engine.release(source['version'] if source else args.version)
     print(f'Immich release: {metadata["tag_name"]}\nRelease notes: {metadata["html_url"]}')
     if not args.yes:
@@ -91,6 +91,7 @@ def install(args, *, prepare=False, source=None):
               'bind_ip': bind_ip, 'port': port, 'timezone': args.timezone or defaults['IMMICH_TIMEZONE'],
               'min_free_gib': float(defaults['MIN_FREE_GIB']), 'health_timeout': int(defaults['HEALTH_TIMEOUT_SECONDS']),
               'storage': library, 'db_path': str(db), 'db_storage': storage.describe(db)}
+    storage.configure_docker_volume(config)
     persist(config)
     atomic_write(STATE / 'maintenance', 'installation pending validation\n')
     if prepare:
@@ -101,6 +102,7 @@ def install(args, *, prepare=False, source=None):
     engine.build_compose(config, official)
     engine.check_port(config)
     engine.compose('pull', timeout=1800, capture=False)
+    engine.preflight_photo(config)
     lifecycle.install_supervisor()
     (STATE / 'maintenance').unlink()
     if prepare:
@@ -113,13 +115,21 @@ def install(args, *, prepare=False, source=None):
     return config
 
 
-def existing_menu():
+def existing_menu(args=None):
     choice = choose('Existing Immich deployment found', ['Status', 'Repair', 'Reconfigure storage',
                     'Update', 'Reinstall application while preserving data', 'Exit'])
     if choice == 0:
         lifecycle.status()
     elif choice in (1, 4):
         config = load_config()
+        if args and args.bind_ip:
+            if not private_ip(args.bind_ip) or args.bind_ip not in environment.lan_addresses():
+                raise SafetyError('Repair bind address must be a private address currently assigned to this host')
+            lifecycle.stop()
+            config['bind_ip'] = args.bind_ip
+            if args.port:
+                config['port'] = args.port
+            persist(config)
         storage.bounded_check(config)
         storage.validate_db(config['db_path'])
         engine.generate_env(config)
@@ -136,8 +146,7 @@ def existing_menu():
         if choice == 4:
             lifecycle.stop()
             engine.compose('pull', timeout=1800, capture=False)
-            engine.compose('up', '-d', '--force-recreate', timeout=600)
-        lifecycle.start(config)
+        lifecycle.start(config, recreate=choice == 4)
         lifecycle.doctor()
     elif choice == 2:
         from operations import reconfigure

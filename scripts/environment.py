@@ -68,7 +68,9 @@ def docker_prefix():
         # Docker Desktop CLI can exist outside the SSH login PATH.
         desktop = Path('/Applications/Docker.app/Contents/Resources/bin/docker')
         if desktop.exists():
-            return [str(desktop)]
+            if run([desktop, 'info'], check=False, timeout=15).returncode == 0:
+                return [str(desktop)]
+            raise SafetyError('Docker Desktop installed but daemon is unavailable; finish setup and start Desktop on target')
         raise SafetyError('Docker is not installed')
     if run(['docker', 'info'], check=False).returncode == 0:
         return ['docker']
@@ -85,6 +87,8 @@ def verify_docker():
     if int(info['ServerVersion'].split('.')[0]) < 25:
         raise SafetyError('Docker Engine 25+ required for current official health checks')
     run(prefix + ['compose', 'version'])
+    if info.get('MemTotal', 0) < 6 * 1024**3 or info.get('NCPU', 0) < 2:
+        raise SafetyError('Docker daemon/VM needs at least 6 GiB memory and two CPUs')
     context = run(prefix + ['context', 'inspect'], check=False)
     if context.returncode == 0:
         endpoints = json.loads(context.stdout)[0].get('Endpoints', {})
@@ -102,9 +106,12 @@ def verify_docker():
         if not settings.exists():
             raise SafetyError('Docker Desktop settings unavailable; cannot verify its VM disk is on local internal storage')
         values = json.loads(settings.read_text())
-        disk = values.get('diskImageLocation') or values.get('dataFolder')
+        disk = values.get('diskImageLocation') or values.get('dataFolder') or values.get('DiskImageLocation')
         if not disk:
-            raise SafetyError('Cannot determine Docker Desktop VM disk location; set/verify its disk image location first')
+            default = Path.home() / 'Library/Containers/com.docker.docker/Data/vms/0/data'
+            if not default.exists():
+                raise SafetyError('Cannot determine Docker Desktop VM disk location; set/verify its disk image location first')
+            disk = str(default)
         storage.validate_db(os.path.expanduser(disk))
     return prefix
 

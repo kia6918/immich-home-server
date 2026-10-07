@@ -10,13 +10,21 @@ then a real i5 deployment with user-selected storage and production backups pres
   on targets. Host secrets/state stay outside repository.
 - Official documentation checked; latest stable release at this session: `v3.2.4`.
 - Core deploy/storage/ownership/supervisor/backup/restore/update/migration implemented.
-- Initial fixture test run: 48 passed, one failed because README had not yet been written.
-  README now exists; rerun and extend tests before release.
+- Automated suite: 58 tests pass. Shell syntax passes. Actual official Compose v3.2.4
+  parsing passed on M4 with spaces, apostrophes and literal dollars. Mutation check
+  proved root-fallback regression test fails when identity validation is disabled.
 - M4 read-only inventory: macOS 26.6.2, arm64 M4 Pro, 24 GiB RAM. Existing Docker.app
   found, CLI outside normal PATH, daemon unavailable. App opened for disposable testing;
   GUI is locked, so initial setup cannot yet be inspected.
 - Requested i5 SSH endpoint and M4 unlock asynchronously; no answer yet.
-- No Immich containers started. No real photo library or NAS modified.
+- Disposable Ubuntu 26.04 ARM64 Lima VM `immich-test` created (8 GiB RAM, 35 GiB sparse
+  disk), no host filesystem shares. Real SSH deployment installed Docker from official
+  apt repository and Immich v3.2.4. Repair handled a partial install without duplication.
+- Real doctor: PASS 8 / WARN 0 / FAIL 0. Five synthetic PNG assets uploaded and downloaded
+  via authenticated API with exact checksum matching. Logical backup and fresh-directory
+  restore passed; five original assets verified after restore.
+- No real photo library/NAS/backup data modified. Temporary SMB and NFS server/mounts
+  created only inside the disposable VM. Network fault/migration tests are next.
 
 ## Key decisions and files
 
@@ -32,8 +40,8 @@ then a real i5 deployment with user-selected storage and production backups pres
 
 ## Next work and unresolved validation
 
-1. Finish runtime safety review, especially network mounts disappearing between host
-   checks and Docker binding, supervisor crash behavior and migration resume handling.
+1. Direct Docker network volumes now fence NAS writes from host-root fallback. Test
+   SMB/NFS disappearance live and check supervisor crash/start behavior.
 2. Fix any lifecycle/state issues found by tests; add full interactive mocked workflow
    tests and real disposable Compose integration tests if Docker becomes available.
 3. Verify current schema asset queries against the pinned release, actual backup/restore

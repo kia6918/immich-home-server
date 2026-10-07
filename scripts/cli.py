@@ -30,7 +30,7 @@ def parser():
                    'destination', 'source-path', 'transaction', 'source-json', 'samples-json', 'config-json', 'backup-dir'):
         result.add_argument('--' + option)
     result.add_argument('--port', type=int)
-    result.add_argument('--ssh-port', type=int, default=22)
+    result.add_argument('--ssh-port', type=int)
     for option in ('yes', 'same-storage', 'full-checksum', 'rollback', 'resume'):
         result.add_argument('--' + option, action='store_true')
     return result
@@ -56,7 +56,8 @@ def worker(args):
     if command == '_space':
         config = load_config()
         storage.bounded_check(config)
-        operations.ensure_empty_destination(config['storage']['path'])
+        if not (STATE / 'copy-job.json').exists():
+            operations.ensure_empty_destination(config['storage']['path'])
         return {'free': shutil.disk_usage(config['storage']['path']).free}
     if command == '_rollback-source':
         migration.rollback_source(args.transaction)
@@ -133,7 +134,20 @@ def main():
         elif command == 'backup':
             backup.backup(args.backup_dir)
         elif command == 'restore':
-            backup.restore(args.bundle or prompt('Application backup directory'))
+            bundle = args.bundle or prompt('Application backup directory')
+            if not (STATE / 'config.json').exists():
+                checked, _manifest = backup.validate_bundle(bundle)
+                source = json.loads((checked / 'config.json').read_text())
+                from common import confirm
+                confirm('Prepare a new host using this backup\'s exact release? Select its existing photo library; the old writer must be stopped/fenced.', 'PREPARE')
+                args.same_storage = True
+                installer.install(args, prepare=True, source=source)
+                backup.restore(bundle, migration=True)
+                (STATE / 'migration-blocked').unlink()
+                lifecycle.start()
+                engine.verify_assets(load_config(), engine.asset_samples())
+            else:
+                backup.restore(bundle)
         elif command == 'update':
             operations.update(args.version)
         elif command == 'uninstall':
@@ -164,7 +178,7 @@ def main():
             safe_host(args.source)
             operations.rsync_copy(args.source + ':' + source.rstrip('/') + '/',
                                   config['storage']['path'].rstrip('/') + '/',
-                                  ssh='ssh -p ' + str(args.ssh_port) + ' -o ConnectTimeout=10')
+                                  ssh='ssh' + (' -p ' + str(args.ssh_port) if args.ssh_port else '') + ' -o ConnectTimeout=10')
         elif command.startswith('_'):
             with contextlib.redirect_stdout(sys.stderr):
                 value = worker(args)
@@ -176,7 +190,7 @@ if __name__ == '__main__':
     try:
         main()
     except (SafetyError, OSError, ValueError, KeyError) as exc:
-        log(str(exc), 'ERROR')
+        print('[ERROR] ' + str(exc), file=sys.stderr, flush=True)
         sys.exit(1)
     except (KeyboardInterrupt, EOFError):
         log('Interrupted; state and data preserved. Inspect doctor and handoff before resuming.', 'WARN')

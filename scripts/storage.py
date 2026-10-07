@@ -191,7 +191,62 @@ def check(storage, minimum_gib=10, *, writable=True):
 
 def bounded_check(config):
     # A disconnected hard NFS mount must not hang the supervisor indefinitely.
-    run([os.sys.executable, ROOT / 'scripts/cli.py', '_probe', '--config-json', json.dumps(config)], timeout=12)
+    import subprocess
+    proc = subprocess.Popen([os.sys.executable, str(ROOT / 'scripts/cli.py'), '_probe', '--config-json', json.dumps(config)],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        output, error = proc.communicate(timeout=12)
+    except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        # Do not join an uninterruptible NFS I/O task. The supervisor must still stop writers.
+        if proc.stdout:
+            proc.stdout.close()
+        if proc.stderr:
+            proc.stderr.close()
+        raise SafetyError('Storage probe timed out; selected storage may be offline') from exc
+    if proc.returncode:
+        raise SafetyError(error.strip() or output.strip() or 'Storage probe failed')
+
+
+def configure_docker_volume(config):
+    """Direct NAS mounts fence writes even if the host's mountpoint falls back to root."""
+    info = config['storage']
+    if info['kind'] == 'local':
+        config.pop('photo_volume', None)
+        return
+    relative = info['relative_path']
+    if info.get('mount_root', '/') != '/':
+        raise SafetyError('Network bind mounts/subexports require explicit path mapping; select the original mounted share/export')
+    if relative == '.' or '..' in Path(relative).parts:
+        raise SafetyError('Network library must be a dedicated subdirectory within the share/export')
+    from common import STATE, save_json
+    endpoint = hashlib.sha256((info['source'] + '/' + relative).encode()).hexdigest()[:12]
+    name = 'immich-home-server-photos-' + config['deployment_id'][:8] + '-' + endpoint
+    if info['kind'] == 'nfs':
+        server, export = info['source'].split(':', 1)
+        nfs_version = prompt('Docker NFS protocol version (must match NAS)', '4' if info['fstype'] == 'nfs4' else '3')
+        if nfs_version not in {'3', '4', '4.1', '4.2'}:
+            raise SafetyError('Unsupported NFS protocol version')
+        options = {'type': 'nfs', 'device': ':' + export,
+                   'o': f'addr={server},rw,nfsvers={nfs_version},hard,nosuid,nodev'}
+    else:
+        import getpass
+        server = info['source'].removeprefix('//').split('/')[0]
+        username = prompt('SMB username for Docker to mount this share (empty for guest)')
+        options = {'type': 'cifs', 'device': info['source'],
+                   'o': f'addr={server},rw,vers=3.1.1,nosuid,nodev,file_mode=0660,dir_mode=0770'}
+        if username:
+            password = getpass.getpass('SMB password for Docker (protected target-only configuration): ')
+            if any(c in username + password for c in '\n\r\x00,'):
+                raise SafetyError('Docker native SMB options cannot encode commas/control characters in credentials; use NFS or a supported OS credential-file mount on Linux')
+            options['o'] += f',username={username},password={password}'
+        else:
+            options['o'] += ',guest'
+    # Never place credentials in the exported public deployment metadata.
+    credentials = STATE / ('network-volume-' + endpoint + '.json')
+    save_json(credentials, options)
+    config['photo_volume'] = {'name': name, 'subpath': relative, 'options_file': credentials.name,
+                              'source': info['source'], 'protocol': info['kind']}
 
 
 def candidates():

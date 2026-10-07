@@ -36,9 +36,8 @@ def backup(destination=None):
     bundle = base / ('application-' + timestamp() + '-' + os.urandom(4).hex())
     bundle.mkdir(mode=0o700, exist_ok=False)
     partial = bundle / 'database.sql.gz.partial'
-    args = engine.docker_prefix() + ['compose', '-p', engine.PROJECT, '--project-directory', str(STATE),
-           '--env-file', str(STATE / '.env'), '-f', str(STATE / 'compose.json'), 'exec', '-T', 'database',
-           'pg_dump', '--clean', '--if-exists', '--username=postgres', '--dbname=immich']
+    args = engine.compose_arguments('exec', '-T', '--interactive=false', 'database',
+           'pg_dump', '--clean', '--if-exists', '--username=postgres', '--dbname=immich')
     with partial.open('xb') as output, (bundle / 'dump-error.log').open('xb') as error:
         output.chmod(0o600) if hasattr(output, 'chmod') else os.chmod(partial, 0o600)
         with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=error) as proc:
@@ -52,6 +51,9 @@ def backup(destination=None):
     for filename in ('config.json', 'config.env', '.env', 'compose.json'):
         shutil.copy2(STATE / filename, bundle / filename)
         (bundle / filename).chmod(0o600)
+    for path in STATE.glob('network-volume-*.json'):
+        shutil.copy2(path, bundle / path.name)
+        (bundle / path.name).chmod(0o600)
     shutil.copytree(STATE / 'official' / config['version'], bundle / 'official')
     hashes = {}
     for path in sorted(bundle.rglob('*')):
@@ -124,9 +126,8 @@ def restore(bundle, *, confirmed=False, migration=False):
             time.sleep(2)
         else:
             raise SafetyError('Fresh database did not become ready')
-        args = engine.docker_prefix() + ['compose', '-p', engine.PROJECT, '--project-directory', str(STATE),
-               '--env-file', str(STATE / '.env'), '-f', str(STATE / 'compose.json'), 'exec', '-T', 'database',
-               'psql', '--username=postgres', '--dbname=immich', '--single-transaction', '--set', 'ON_ERROR_STOP=on']
+        args = engine.compose_arguments('exec', '-T', 'database', 'psql', '--username=postgres',
+               '--dbname=immich', '--single-transaction', '--set', 'ON_ERROR_STOP=on')
         error_path = STATE / 'restore-error.log'
         with error_path.open('wb') as error, gzip.open(bundle / 'database.sql.gz', 'rt') as source:
             os.chmod(error_path, 0o600)

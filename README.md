@@ -68,8 +68,14 @@ Photo storage is identified by mount target, filesystem type, persistent volume 
 (local), normalized share/export source (network), relative library path, and a unique
 library marker. The check tests read/write access and configurable minimum free space.
 Missing storage, root fallback, changed UUID/source, wrong marker, or low free space
-prevents startup. Docker cannot create missing bind directories. Docker restart
-policies are disabled; systemd (Linux) or launchd (macOS) owns restarts and checks
+prevents startup. Docker cannot create missing bind directories. For SMB/NFS, the
+container uses a native Docker network volume with the exact share/export and existing
+library subpath. If the host mount directory falls back to local root, the container
+still has a real network mount and cannot upload into that local fallback. An isolated
+container preflight verifies marker and read/write access. This needs Docker Engine
+26+ and Compose with volume-subpath support.
+
+Docker restart policies are disabled; systemd (Linux) or launchd (macOS) owns restarts and checks
 storage every 15 seconds. A storage fault stops the stack and requires an explicit
 `start` after repair. Timeout-isolated probes prevent a hard NFS mount from hanging
 the supervisor forever. Do not start this project manually with raw Docker commands.
@@ -99,7 +105,11 @@ For an unmounted share, choose **Add network storage → SMB or NFS**. The insta
 requires an empty mount directory, mounts the exact server/share/export, and tests it.
 Linux SMB credentials are installed in a root-only `/etc/immich-home-server` file.
 macOS uses the native `mount_smbfs` password prompt without persisting passwords in
-this repository or configuration. Guest SMB is supported. NFS relies on server-side
+the repository. Docker's independent SMB mount also needs credentials, stored in
+protected target-only volume configuration and the Docker daemon's private volume
+metadata. Passwords are never put in command arguments or printed. Docker native SMB
+options cannot encode comma/control characters in credentials; use NFS for that case.
+Guest SMB is supported. NFS relies on server-side
 permissions; configure the exporting NAS for the deployment user/container access.
 Linux needs `cifs-utils` for SMB and `nfs-common` for NFS (install these if mount reports
 a missing helper).
@@ -149,6 +159,8 @@ jump hosts, keys, and IPv6 without storing credentials in the repository.
 Re-running deployment detects existing state and offers Status, Repair, Reconfigure,
 Update, Reinstall while preserving data, or Exit. Partial operations leave maintenance
 latches and protected logs rather than silently starting an uncertain database.
+To change a host's private bind address, rerun deploy with `--bind-ip <assigned-ip>` and
+choose Repair. A stable DHCP reservation is recommended.
 
 ## Backup, restore, update, and migration
 
@@ -176,6 +188,8 @@ File names/counts/bytes and a deterministic sample of SHA-256 checksums are comp
 **from destination to source**. Database/config backups stream between SSH connections
 through the controller without being saved on its disk. Source files are never deleted.
 The rollback command is printed before cutover and again on completion/failure.
+Resume an interrupted copy with `./migrate.sh --resume --source <alias> --destination
+<alias> --transaction <printed-id>`; completed files are not overwritten.
 
 Storage reconfiguration offers an existing copy of the same library, a non-destructive
 copy, or cancellation. It never silently moves files or points an existing database at
@@ -198,6 +212,9 @@ Tailscale access controls or enable Funnel/public exposure.
 ```bash
 python3 -m unittest discover -s tests -v
 ./tests/check-shell.sh
+python3 tests/mutation-check.py
+# Optional official release parsing without starting containers:
+python3 tests/compose-smoke.py --compose 'docker compose'
 ```
 
 Tests use temporary directories and mount/Docker fixtures. They cover mount parsing,

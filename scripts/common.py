@@ -31,7 +31,15 @@ def run(args, *, capture=True, check=True, timeout=60, **kwargs):
         raise SafetyError(f'{args[0]} unavailable or timed out: {exc}') from exc
     if check and result.returncode:
         # Do not expose command arguments or captured output: either can contain secrets.
-        raise SafetyError(f'{args[0]} failed (exit {result.returncode}). Run doctor or inspect protected logs.')
+        detail = ''
+        if capture:
+            try:
+                path = STATE / 'logs' / ('command-' + timestamp() + '-' + os.urandom(3).hex() + '.log')
+                atomic_write(path, f'Exit: {result.returncode}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}')
+                detail = f' Protected diagnostic: {path}'
+            except OSError:
+                pass
+        raise SafetyError(f'{args[0]} failed (exit {result.returncode}).{detail}')
     return result
 
 
@@ -175,12 +183,17 @@ def safe_host(host):
     return host
 
 
-def ssh_args(host, port=22):
+def ssh_args(host, port=None):
     safe_host(host)
-    if not 1 <= int(port) <= 65535:
+    if port is not None and not 1 <= int(port) <= 65535:
         raise SafetyError('Invalid SSH port')
-    return ['ssh', '-p', str(port), '-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15',
-            '-o', 'ServerAliveCountMax=3', host]
+    args = ['ssh']
+    if os.environ.get('IMMICH_SSH_CONFIG'):
+        args += ['-F', os.environ['IMMICH_SSH_CONFIG']]
+    if port is not None:
+        args += ['-p', str(port)]
+    return args + ['-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15',
+                   '-o', 'ServerAliveCountMax=3', host]
 
 
 def remote_command(arguments):

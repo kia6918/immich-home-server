@@ -13,6 +13,9 @@ backups/
 *.pem
 *.key
 credentials*
+*.credentials
+.ssh/
+test-assets.json
 __pycache__/
 *.pyc
 .DS_Store

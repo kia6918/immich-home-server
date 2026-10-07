@@ -67,7 +67,7 @@ def library_manifest(root, *, full=False):
     root = Path(root)
     files = {}
     for current, directories, names in os.walk(root, followlinks=False):
-        directories[:] = sorted(d for d in directories if not d.startswith(('.immich-home-server-owner', '.immich-owner-history')))
+        directories[:] = sorted(d for d in directories if not d.startswith(('.immich-home-server-owner', '.immich-owner-history', '.immich-partial', '.immich-docker-probe-')))
         for directory in directories:
             if (Path(current) / directory).is_symlink():
                 raise SafetyError('Library contains directory symlinks; manually map external libraries')
@@ -120,7 +120,7 @@ def copy_library(source, destination, *, full=False):
 
 def rsync_copy(source, destination, *, ssh=None):
     version = run(['rsync', '--version']).stdout
-    args = ['rsync', '-a', '--partial', '--ignore-existing', '--no-owner', '--no-group', '--progress']
+    args = ['rsync', '-a', '--partial', '--partial-dir=.immich-partial', '--ignore-existing', '--no-owner', '--no-group', '--progress']
     # Apple's bundled rsync does not support -s; argv still preserves spaces for local paths.
     if 'version 3.' in version:
         args += ['--protect-args']
@@ -156,6 +156,7 @@ def reconfigure():
     if storage.same_library(config['storage'], destination):
         raise SafetyError('Same underlying library; no storage reconfiguration needed. Maintenance latch preserved for explicit recovery.')
     config['storage'] = destination
+    storage.configure_docker_volume(config)
     persist(config)
     engine.generate_env(config)
     engine.build_compose(config, STATE / 'official' / config['version'])
