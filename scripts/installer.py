@@ -102,7 +102,8 @@ def install(args, *, prepare=False, source=None):
     engine.generate_env(config)
     engine.build_compose(config, official)
     engine.check_port(config)
-    engine.compose('pull', timeout=1800, capture=False)
+    log('Pulling pinned official images; this may take several minutes')
+    engine.compose('pull', '--quiet', timeout=1800, capture=False)
     engine.preflight_photo(config)
     lifecycle.install_supervisor()
     (STATE / 'maintenance').unlink()
@@ -134,9 +135,7 @@ def existing_menu(args=None):
         storage.bounded_check(config)
         storage.validate_db(config['db_path'])
         engine.generate_env(config)
-        official = STATE / 'official' / config['version']
-        if not official.exists():
-            engine.download_release(engine.release(config['version']), official)
+        official = engine.ensure_release(config['version'])
         engine.build_compose(config, official)
         lifecycle.install_supervisor()
         if (STATE / 'migration-blocked').exists():
@@ -146,7 +145,8 @@ def existing_menu(args=None):
             (STATE / 'maintenance').unlink()
         if choice == 4:
             lifecycle.stop()
-            engine.compose('pull', timeout=1800, capture=False)
+            log('Pulling pinned official images for reinstall')
+            engine.compose('pull', '--quiet', timeout=1800, capture=False)
         lifecycle.start(config, recreate=choice == 4)
         lifecycle.doctor()
     elif choice == 2:

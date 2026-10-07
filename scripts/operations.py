@@ -34,9 +34,7 @@ def update(target=None):
     old_image = backups.database_image()
     config['target_version'] = version
     persist(config)
-    official = STATE / 'official' / version
-    if not official.exists():
-        engine.download_release(metadata, official)
+    official = engine.ensure_release(version, metadata)
     next_config = dict(config, version=version)
     engine.generate_env(next_config)
     engine.build_compose(next_config, official)
@@ -48,7 +46,8 @@ def update(target=None):
         raise SafetyError('PostgreSQL image changed. Use matching-version migration with logical restore after reviewing upstream database upgrade requirements.')
     persist(next_config)
     try:
-        engine.compose('pull', timeout=1800, capture=False)
+        log('Pulling official images for explicit target ' + version)
+        engine.compose('pull', '--quiet', timeout=1800, capture=False)
         storage.bounded_check(next_config)
         (STATE / 'maintenance').unlink()
         lifecycle.start(next_config)

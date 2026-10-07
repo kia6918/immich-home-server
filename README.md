@@ -222,7 +222,7 @@ local/USB/SMB/NFS identification, root fallback, DB locality, immutable library 
 environment parsing, secret permissions, service isolation, ownership transfer,
 copy/backup verification, and migration ordering. Platform support describes implemented
 adapters; live platform/mount/deployment evidence is recorded in
-[the handoff](docs/HANDOFF.md). A test pass alone does not certify an untested host or NAS.
+[the validation record](docs/VALIDATION.md) and [handoff](docs/HANDOFF.md). A test pass alone does not certify an untested host or NAS.
 
 ## Official sources
 

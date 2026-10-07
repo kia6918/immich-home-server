@@ -238,7 +238,7 @@ def configure_docker_volume(config):
         if username:
             password = getpass.getpass('SMB password for Docker (protected target-only configuration): ')
             if any(c in username + password for c in '\n\r\x00,'):
-                raise SafetyError('Docker native SMB options cannot encode commas/control characters in credentials; use NFS or a supported OS credential-file mount on Linux')
+                raise SafetyError('Docker native SMB options cannot encode commas/control characters in credentials; use NFS or a NAS account with an encodable password')
             options['o'] += f',username={username},password={password}'
         else:
             options['o'] += ',guest'

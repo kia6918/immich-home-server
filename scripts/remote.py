@@ -30,7 +30,9 @@ def remote_home(host, port=None):
 def bootstrap(host, port=None):
     log('Connecting over SSH to ' + host)
     run(ssh_args(host, port) + ['true'], capture=False)
-    run(ssh_args(host, port) + ['command -v python3 >/dev/null && python3 -c "import sys; sys.exit(sys.version_info < (3,10))"'])
+    check = run(ssh_args(host, port) + ['command -v python3 >/dev/null && python3 -c "import sys; sys.exit(sys.version_info < (3,10))"'], check=False)
+    if check.returncode:
+        raise SafetyError('Target needs Python 3.10+ before the installer can run; install it using the target OS package manager')
     result = run(ssh_args(host, port) + ['umask 077; mktemp -d "$HOME/.immich-installer.XXXXXX"'])
     directory = result.stdout.strip()
     if not directory.startswith('/') or any(c in directory for c in '\n\r\x00'):

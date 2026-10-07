@@ -4,17 +4,19 @@ Evidence from 2026-10-07. These are disposable tests, not a production deploymen
 
 ## Automated and static checks
 
-- Python standard-library unittest suite: 65 passing tests on M4 macOS.
+- Python standard-library unittest suite: 70 passing tests on M4 macOS.
 - All Bash entry points pass `bash -n`.
 - ShellCheck passed with `-x -P SCRIPTDIR` inside disposable Ubuntu.
 - Mutation tests: disabling storage identity validation makes root-fallback regression
   fail; disabling migration transaction binding makes wrong-transaction regression fail.
+  Off-host Docker override and premature release-cache publication mutations also fail
+  their regression tests.
 - Actual Docker Compose parser, pinned official v3.2.4 assets: spaces, apostrophes,
   literal dollars, isolated project names and disabled container restart policies pass.
 
 ## Live disposable Linux checks
 
-Host: M4 running two isolated Ubuntu 26.04.1 ARM64 VMs, 4 CPU / 8 GiB each.
+Test environment: M4 ran two isolated Ubuntu 26.04.1 ARM64 VMs, 4 CPU / 8 GiB each.
 Docker Engine 29.8.2, Compose 5.6.0, official Immich v3.2.4. No host disk shares.
 Synthetic SMB/NFS NAS runs inside one VM. No real NAS or photos involved.
 
@@ -27,14 +29,23 @@ Synthetic SMB/NFS NAS runs inside one VM. No real NAS or photos involved.
 | Backup / restore | Logical pg_dump bundle restored into fresh local directory; old directory retained; originals still downloadable |
 | Local → SMB reconfiguration | Non-overwriting rsync; 21 files verified; direct Docker CIFS volume; doctor PASS 9 |
 | Missing SMB host mount | Guard stops app; explicit start refuses root fallback even with matching marker; underlying directory receives no photos |
+| Missing NFS host mount | Guard stops app; explicit start rejects root fallback; underlying directory contains only synthetic marker |
 | Same SMB library migration | Matching release, DB-only transfer, original checksums, doctor PASS 9; source stopped and blocked |
 | Same-storage rollback | Destination stopped/releases owner before preserved source restarts; source start refused during cutover |
 | Controller HTTP access | HTTP ping through explicit loopback SSH tunnel returns pong; tunnel removed |
 | SMB → NFS reconfiguration | Non-overwriting copy + manifest verification, native Docker NFS volume; five authenticated originals downloadable |
+| New-storage migration | NFS → destination local filesystem; all 21 file checksums verified; logical restore, doctor PASS 8 and five authenticated original downloads pass |
+| New-storage rollback | Destination stopped, preserved source restarts using unchanged NFS library/database |
+| Explicit update | v3.2.2 → v3.2.4; pre-update DB backup, doctor PASS 8, original checksum checks and authenticated downloads pass; unrelated fixture services/backups preserved |
+| Safe uninstall | Full library manifest unchanged; DB/config/valid backups retained; unrelated container ID/running state, network, volume and backup hash unchanged |
+| Add SMB/NFS UI | Both native host mounts created interactively; protocol/source/read/write/free-space checks pass; database paths on both mounts refused |
+| Interrupted cutover / resume | Destination NFS mount removed after prepare; source reached ownership-released and both writers stayed stopped; remount + same transaction resume passes doctor PASS 9 and five authenticated originals |
 
 ## Not yet verified
 
-New-storage migration, update and uninstall live checks are in progress.
+Both disposable VMs and their network were removed; temporary Lima was uninstalled.
+The pre-existing Docker Desktop installation remains, stopped. No Immich remains on M4.
+The i5 deployment remains pending.
 macOS Intel/Apple Silicon, Linux x86_64, Debian and physical USB adapters have fixture
 coverage but no live deployment evidence. Native M4 Docker Desktop could not complete
 initial GUI setup while the Mac was locked. No permanent M4 Immich deployment exists.

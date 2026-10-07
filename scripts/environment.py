@@ -64,6 +64,8 @@ def lan_addresses():
 
 
 def docker_prefix():
+    if os.environ.get('DOCKER_HOST') and not os.environ['DOCKER_HOST'].startswith('unix://'):
+        raise SafetyError('DOCKER_HOST points off-host; unset it and use the target host\'s local Docker daemon')
     if not shutil.which('docker'):
         # Docker Desktop CLI can exist outside the SSH login PATH.
         desktop = Path('/Applications/Docker.app/Contents/Resources/bin/docker')

@@ -169,15 +169,80 @@ class WorkflowTests(TemporaryState):
         self.assertIn('/mnt/photos', candidates)
         self.assertNotIn('/var/lib/docker/volumes/x/_data', candidates)
 
+    def test_nfs_helper_provisioning_only_when_missing(self):
+        for missing in (True, False):
+            mount = self.root / ('new-nfs-' + str(missing))
+            with self.subTest(missing=missing), contextlib.ExitStack() as stack:
+                stack.enter_context(patch('builtins.input', side_effect=['2', 'nas.local', '/exports/photos', str(mount), 'YES']))
+                stack.enter_context(patch('storage.platform.system', return_value='Linux'))
+                stack.enter_context(patch('storage.mounts', return_value=[{'target': '/', 'fstype': 'ext4'}]))
+                stack.enter_context(patch('storage.describe', return_value={'kind': 'nfs', 'source': 'nas.local:/exports/photos'}))
+                stack.enter_context(patch('storage.shutil.which', return_value=None if missing else '/usr/sbin/mount.nfs'))
+                stack.enter_context(patch('pathlib.Path.is_file', return_value=False))
+                stack.enter_context(patch('environment.platform_info'))
+                invoke = stack.enter_context(patch('storage.run'))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(storage.add_network(), str(mount))
+                installations = [call.args[0] for call in invoke.call_args_list if 'apt-get' in call.args[0]]
+                self.assertEqual(len(installations), 2 if missing else 0)
+                if missing:
+                    self.assertIn('nfs-common', installations[-1])
+
     def test_operation_lock_refuses_concurrent_mutation(self):
         with common.operation_lock(wait=0):
             with self.assertRaises(common.SafetyError):
                 with common.operation_lock(wait=0):
                     self.fail('Concurrent mutation accepted')
 
+    def test_lan_health_check_bypasses_outbound_proxy(self):
+        from unittest.mock import MagicMock
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b'{"res":"pong"}'
+        opener = MagicMock()
+        opener.open.return_value = response
+        with patch('engine.urllib.request.build_opener', return_value=opener) as build:
+            self.assertEqual(engine.http(config()), 'http://192.168.1.50:2283')
+        self.assertEqual(build.call_args.args[0].proxies, {})
+
     def test_option_like_ssh_username_rejected(self):
         with self.assertRaises(common.SafetyError):
             common.safe_host('-F@server')
+
+    def test_remote_docker_host_override_rejected_before_any_command(self):
+        import os
+        import environment
+        with patch.dict(os.environ, {'DOCKER_HOST': 'tcp://another-host:2375'}), patch('environment.run') as invoke:
+            with self.assertRaises(common.SafetyError):
+                environment.docker_prefix()
+            invoke.assert_not_called()
+
+    def test_interrupted_release_download_can_retry_and_cache_detects_corruption(self):
+        directory = self.state / 'official/v3.2.4'
+        metadata = {'tag_name': 'v3.2.4', 'html_url': 'https://github.com/immich-app/immich/releases/tag/v3.2.4',
+                    'assets': [{'name': f, 'browser_download_url': 'https://github.com/immich-app/immich/releases/download/v3.2.4/' + f}
+                               for f in ['docker-compose.yml', 'example.env']]}
+        with patch('engine.fetch', side_effect=[b'docker-compose.yml', b'compose fixture', common.SafetyError('network interrupted')]):
+            with self.assertRaises(common.SafetyError):
+                engine.download_release(metadata, directory)
+        self.assertFalse(directory.exists())
+        with patch('engine.fetch', side_effect=[b'docker-compose.yml', b'compose fixture', b'env fixture']):
+            engine.download_release(metadata, directory)
+        engine.verify_release(directory, 'v3.2.4')
+        (directory / 'docker-compose.yml').write_text('changed')
+        with self.assertRaises(common.SafetyError):
+            engine.verify_release(directory, 'v3.2.4')
+
+    def test_repair_preserves_incomplete_release_before_retry(self):
+        directory = self.state / 'official/v3.2.4'
+        directory.mkdir(parents=True)
+        (directory / 'sentinel').write_text('preserved')
+        with patch('engine.release', return_value={'tag_name': 'v3.2.4'}), patch('engine.download_release') as download, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(engine.ensure_release('v3.2.4'), directory)
+        download.assert_called_once()
+        preserved = list((self.state / 'official').glob('v3.2.4.incomplete-*'))
+        self.assertEqual(len(preserved), 1)
+        self.assertEqual((preserved[0] / 'sentinel').read_text(), 'preserved')
 
     def test_update_failure_never_automatically_downgrades(self):
         cfg = config()
@@ -189,6 +254,7 @@ class WorkflowTests(TemporaryState):
                       patch('operations.confirm'), patch('engine.asset_samples', return_value=[]),
                       patch('lifecycle.stop'), patch('backup.backup', return_value=self.root), patch('backup.database_image', return_value='postgres:fixed'),
                       patch('operations.persist'), patch('engine.generate_env'), patch('engine.build_compose'),
+                      patch('engine.ensure_release', return_value=official),
                       patch('engine.compose'), patch('lifecycle.start', side_effect=common.SafetyError('health failed'))]:
                 stack.enter_context(p)
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(common.SafetyError):

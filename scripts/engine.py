@@ -40,7 +40,10 @@ def release(version=None):
 
 
 def download_release(metadata, destination):
-    destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+    if destination.exists():
+        raise SafetyError('Existing official release directory preserved; verify it before replacement')
+    staged = destination.with_name(destination.name + '.download-' + os.urandom(4).hex())
+    staged.mkdir(mode=0o700, parents=True, exist_ok=False)
     # Check the live official installation page at deployment/update time.
     if b'docker-compose.yml' not in fetch(DOCS):
         raise SafetyError('Official installation guidance changed; review before proceeding')
@@ -56,10 +59,37 @@ def download_release(metadata, destination):
         digest = 'sha256:' + hashlib.sha256(content).hexdigest()
         if asset.get('digest') and asset['digest'] != digest:
             raise SafetyError('Official release asset checksum mismatch')
-        atomic_write(destination / filename, content.decode())
+        atomic_write(staged / filename, content.decode())
         hashes[filename] = digest
-    save_json(destination / 'release.json', {'version': metadata['tag_name'], 'url': metadata['html_url'],
+    save_json(staged / 'release.json', {'version': metadata['tag_name'], 'url': metadata['html_url'],
               'asset_sha256': hashes, 'notes': metadata.get('body', '')})
+    staged.rename(destination)
+
+
+def verify_release(directory, version):
+    try:
+        manifest = json.loads((directory / 'release.json').read_text())
+        if manifest['version'] != version:
+            raise SafetyError('Cached official release version mismatch')
+        for filename in ('docker-compose.yml', 'example.env'):
+            digest = 'sha256:' + hashlib.sha256((directory / filename).read_bytes()).hexdigest()
+            if manifest['asset_sha256'][filename] != digest:
+                raise SafetyError('Cached official release checksum mismatch: ' + filename)
+    except (OSError, KeyError, ValueError) as exc:
+        raise SafetyError('Cached official release is incomplete or invalid') from exc
+
+
+def ensure_release(version, metadata=None):
+    directory = STATE / 'official' / version
+    try:
+        verify_release(directory, version)
+    except SafetyError:
+        if directory.exists():
+            preserved = directory.with_name(directory.name + '.incomplete-' + os.urandom(4).hex())
+            directory.rename(preserved)
+            log('Incomplete release cache preserved at ' + str(preserved), 'WARN')
+        download_release(metadata or release(version), directory)
+    return directory
 
 
 def generate_env(config, password=None):
@@ -123,6 +153,7 @@ def harden_compose(value, config):
 
 
 def build_compose(config, official_dir):
+    verify_release(official_dir, config['version'])
     result = run(docker_prefix() + ['compose', '-p', PROJECT, '--project-directory', str(STATE),
                  '--env-file', str(STATE / '.env'), '-f', str(official_dir / 'docker-compose.yml'),
                  'config', '--format', 'json'])
@@ -186,7 +217,8 @@ def healthy():
 
 def http(config):
     url = f'http://{config["bind_ip"]}:{config["port"]}/api/server/ping'
-    with urllib.request.urlopen(url, timeout=10) as response:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(url, timeout=10) as response:
         result = json.loads(response.read(4096))
     if result.get('res') != 'pong':
         raise SafetyError('Immich HTTP ping did not return pong')

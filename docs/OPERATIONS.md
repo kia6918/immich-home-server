@@ -65,7 +65,7 @@ validation rather than silently losing asset access.
 rsync copies keep timestamps/permissions/hierarchy and use partial files without source
 deletion or destination overwrite. The receiver holds its selected directory open and
 writes relative to that filesystem, preventing an unmount from redirecting copies to
-the local directory underneath. Manifests use bounded memory even for large libraries.
+the local directory underneath. Manifests stream hashes rather than keeping a per-file table for the entire library.
 SSH permissions and NAS UID mappings must permit
 the chosen paths. Hard links/extended attributes/ACLs are not assumed portable between
 SMB, NFS, APFS and Linux; original photo bytes and regular-file timestamps are verified.

@@ -99,7 +99,7 @@ def main():
             if value is not None:
                 arguments += [flag, value]
         remote.execute(args.host, command, arguments, port=args.ssh_port,
-                       tty=command in {'restore', 'update', 'uninstall', 'reconfigure'}, capture=False)
+                       tty=command in {'install', 'restore', 'update', 'uninstall', 'reconfigure', 'select-storage', 'install-docker'}, capture=False)
         return
     if command == 'guard':
         lifecycle.guard()
